@@ -80,8 +80,8 @@ func (tm *Map[K, V]) LoadAll() map[K]V {
 	return tm.unlockedLoadAll()
 }
 
-// CountAll returns a count of all key/value pairs in the map.
-func (tm *Map[K, V]) CountAll() int {
+// Len returns the number of key/value pairs in the map.
+func (tm *Map[K, V]) Len() int {
 	tm.lock.RLock()
 	defer tm.lock.RUnlock()
 	return len(tm.value)
