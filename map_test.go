@@ -9,11 +9,12 @@ import (
 	"github.com/datawire/dlib/dlog"
 	"github.com/stretchr/testify/assert"
 	"github.com/telepresenceio/telepresence/rpc/v2/manager"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/telepresenceio/watchable"
 )
 
-func assertMessageMapSnapshotEqual[V watchable.Message](t *testing.T, expected, actual watchable.Snapshot[V], msgAndArgs ...any) bool {
+func assertMessageMapSnapshotEqual[K comparable, V proto.Message](t *testing.T, expected, actual watchable.Snapshot[K, V], msgAndArgs ...any) bool {
 	t.Helper()
 
 	expectedBytes, err := json.MarshalIndent(expected, "", "    ")
@@ -37,7 +38,7 @@ func assertMessageMapSnapshotEqual[V watchable.Message](t *testing.T, expected, 
 	}
 
 	for i := range actual.Updates {
-		var m watchable.Message = expected.Updates[i].Value
+		var m proto.Message = expected.Updates[i].Value
 		if m == nil {
 			continue
 		}
@@ -62,49 +63,49 @@ func agentInfoCmp(a *manager.AgentInfo, n string) bool {
 }
 
 func TestMessageMap_Delete(t *testing.T) {
-	typedTestMessageMap_Delete[*manager.AgentInfo](t, agentInfoCtor)
+	typedTestMessageMap_Delete[string, *manager.AgentInfo](t, agentInfoCtor)
 }
 
-func typedTestMessageMap_Delete[V watchable.Message](t *testing.T, ctor func(string) V) {
-	var m watchable.Map[V]
+func typedTestMessageMap_Delete[K ~string, V proto.Message](t *testing.T, ctor func(string) V) {
+	var m watchable.Map[K, V]
 
 	// Check that a delete on a zero map works
 	m.Delete("a")
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{State: map[string]V{}},
-		watchable.Snapshot[V]{State: m.LoadAll()})
+		watchable.Snapshot[K, V]{State: map[K]V{}},
+		watchable.Snapshot[K, V]{State: m.LoadAll()})
 
 	// Check that a normal delete works
 	m.Store("a", ctor("a"))
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"a": ctor("a"),
 			},
 		},
-		watchable.Snapshot[V]{State: m.LoadAll()})
+		watchable.Snapshot[K, V]{State: m.LoadAll()})
 	m.Delete("a")
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{},
+		watchable.Snapshot[K, V]{
+			State: map[K]V{},
 		},
-		watchable.Snapshot[V]{State: m.LoadAll()})
+		watchable.Snapshot[K, V]{State: m.LoadAll()})
 
 	// Check that a repeated delete works
 	m.Delete("a")
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{},
+		watchable.Snapshot[K, V]{
+			State: map[K]V{},
 		},
-		watchable.Snapshot[V]{State: m.LoadAll()})
+		watchable.Snapshot[K, V]{State: m.LoadAll()})
 }
 
 func TestMessageMap_Load(t *testing.T) {
-	typedTestMessageMap_Load[*manager.AgentInfo](t, agentInfoCtor)
+	typedTestMessageMap_Load[string, *manager.AgentInfo](t, agentInfoCtor)
 }
 
-func typedTestMessageMap_Load[V watchable.Message](t *testing.T, ctor func(string) V) {
-	var m watchable.Map[V]
+func typedTestMessageMap_Load[K ~string, V proto.Message](t *testing.T, ctor func(string) V) {
+	var m watchable.Map[K, V]
 
 	a := ctor("value")
 	m.Store("k", a)
@@ -136,11 +137,11 @@ func TestMessageMap_LoadAll(t *testing.T) {
 }
 
 func TestMessageMap_LoadAndDelete(t *testing.T) {
-	typedTestMessageMap_LoadAndDelete[*manager.AgentInfo](t, agentInfoCtor)
+	typedTestMessageMap_LoadAndDelete[string, *manager.AgentInfo](t, agentInfoCtor)
 }
 
-func typedTestMessageMap_LoadAndDelete[V watchable.Message](t *testing.T, ctor func(string) V) {
-	var m watchable.Map[V]
+func typedTestMessageMap_LoadAndDelete[K ~string, V proto.Message](t *testing.T, ctor func(string) V) {
+	var m watchable.Map[K, V]
 
 	a := ctor("value")
 	m.Store("k", a)
@@ -162,11 +163,11 @@ func typedTestMessageMap_LoadAndDelete[V watchable.Message](t *testing.T, ctor f
 }
 
 func TestMessageMap_LoadOrStore(t *testing.T) {
-	typedTestMessageMap_LoadOrStore[*manager.AgentInfo](t, agentInfoCtor)
+	typedTestMessageMap_LoadOrStore[string, *manager.AgentInfo](t, agentInfoCtor)
 }
 
-func typedTestMessageMap_LoadOrStore[V watchable.Message](t *testing.T, ctor func(string) V) {
-	var m watchable.Map[V]
+func typedTestMessageMap_LoadOrStore[K ~string, V proto.Message](t *testing.T, ctor func(string) V) {
+	var m watchable.Map[K, V]
 
 	a := ctor("value")
 	m.Store("k", a)
@@ -202,13 +203,13 @@ func TestMessageMap_CompareAndSwap(t *testing.T) {
 }
 
 func TestMessageMap_Subscribe(t *testing.T) {
-	typedTestMessageMap_Subscribe[*manager.AgentInfo](t, agentInfoCtor)
+	typedTestMessageMap_Subscribe[string, *manager.AgentInfo](t, agentInfoCtor)
 }
 
-func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(string) V) {
+func typedTestMessageMap_Subscribe[K ~string, V proto.Message](t *testing.T, ctor func(string) V) {
 	ctx := dlog.NewTestContext(t, true)
 	ctx, cancelCtx := context.WithCancel(ctx)
-	var m watchable.Map[V]
+	var m watchable.Map[K, V]
 
 	m.Store("a", ctor("A"))
 	m.Store("b", ctor("B"))
@@ -220,8 +221,8 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 	snapshot, ok := <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"a": ctor("A"),
 				"b": ctor("B"),
 				"c": ctor("C"),
@@ -239,8 +240,8 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 	snapshot, ok = <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"a": ctor("A"),
 				"b": ctor("B"),
 				"c": ctor("C"),
@@ -248,7 +249,7 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 				"e": ctor("E"),
 				"f": ctor("F"),
 			},
-			Updates: []watchable.Update[V]{
+			Updates: []watchable.Update[K, V]{
 				{Key: "d", Value: ctor("D")},
 				{Key: "e", Value: ctor("E")},
 				{Key: "f", Value: ctor("F")},
@@ -261,15 +262,15 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 	snapshot, ok = <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"b": ctor("B"),
 				"c": ctor("C"),
 				"d": ctor("D"),
 				"e": ctor("E"),
 				"f": ctor("F"),
 			},
-			Updates: []watchable.Update[V]{
+			Updates: []watchable.Update[K, V]{
 				{Key: "a", Delete: true, Value: ctor("A")},
 			},
 		},
@@ -280,14 +281,14 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 	snapshot, ok = <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"c": ctor("C"),
 				"d": ctor("D"),
 				"e": ctor("E"),
 				"f": ctor("F"),
 			},
-			Updates: []watchable.Update[V]{
+			Updates: []watchable.Update[K, V]{
 				{Key: "b", Delete: true, Value: ctor("B")},
 			},
 		},
@@ -299,13 +300,13 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 	snapshot, ok = <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"d": ctor("D"),
 				"e": ctor("E"),
 				"f": ctor("F"),
 			},
-			Updates: []watchable.Update[V]{
+			Updates: []watchable.Update[K, V]{
 				{Key: "c", Value: ctor("c")},
 				{Key: "c", Delete: true, Value: ctor("c")},
 			},
@@ -336,18 +337,18 @@ func typedTestMessageMap_Subscribe[V watchable.Message](t *testing.T, ctor func(
 }
 
 func TestMessageMap_SubscribeSubset(t *testing.T) {
-	typedTestMessageMap_SubscribeSubset[*manager.AgentInfo](t, agentInfoCtor, agentInfoCmp)
+	typedTestMessageMap_SubscribeSubset[string, *manager.AgentInfo](t, agentInfoCtor, agentInfoCmp)
 }
 
-func typedTestMessageMap_SubscribeSubset[V watchable.Message](t *testing.T, ctor func(string) V, comp func(V, string) bool) {
+func typedTestMessageMap_SubscribeSubset[K ~string, V proto.Message](t *testing.T, ctor func(string) V, comp func(V, string) bool) {
 	ctx := dlog.NewTestContext(t, true)
-	var m watchable.Map[V]
+	var m watchable.Map[K, V]
 
 	m.Store("a", ctor("A"))
 	m.Store("b", ctor("B"))
 	m.Store("c", ctor("C"))
 
-	ch := m.SubscribeSubset(ctx, func(k string, v V) bool {
+	ch := m.SubscribeSubset(ctx, func(k K, v V) bool {
 		return !comp(v, "ignoreme")
 	})
 
@@ -355,8 +356,8 @@ func typedTestMessageMap_SubscribeSubset[V watchable.Message](t *testing.T, ctor
 	snapshot, ok := <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"a": ctor("A"),
 				"b": ctor("B"),
 				"c": ctor("C"),
@@ -376,13 +377,13 @@ func typedTestMessageMap_SubscribeSubset[V watchable.Message](t *testing.T, ctor
 	snapshot, ok = <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"a": ctor("a"),
 				"b": ctor("B"),
 				"c": ctor("C"),
 			},
-			Updates: []watchable.Update[V]{
+			Updates: []watchable.Update[K, V]{
 				{Key: "a", Value: ctor("a")},
 			},
 		},
@@ -393,12 +394,12 @@ func typedTestMessageMap_SubscribeSubset[V watchable.Message](t *testing.T, ctor
 	snapshot, ok = <-ch
 	assert.True(t, ok)
 	assertMessageMapSnapshotEqual(t,
-		watchable.Snapshot[V]{
-			State: map[string]V{
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
 				"b": ctor("B"),
 				"c": ctor("C"),
 			},
-			Updates: []watchable.Update[V]{
+			Updates: []watchable.Update[K, V]{
 				{Key: "a", Delete: true, Value: ctor("a")},
 			},
 		},
@@ -416,7 +417,7 @@ func typedTestMessageMap_SubscribeSubset[V watchable.Message](t *testing.T, ctor
 
 	// Now, since we've called m.Close(), let's check that subscriptions get already-closed
 	// channels.
-	ch = m.SubscribeSubset(ctx, func(k string, v V) bool {
+	ch = m.SubscribeSubset(ctx, func(k K, v V) bool {
 		return !comp(v, "ignoreme")
 	})
 	snapshot, ok = <-ch
