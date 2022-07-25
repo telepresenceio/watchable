@@ -1,0 +1,22 @@
+linters:
+  disable:
+    - structcheck # does not yet support Go 1.18 as of golangci-lint 1.47.2
+  enable:
+    - gci
+    - nolintlint
+linters-settings:
+  gci:
+    sections:
+      - standard
+      - default
+      - prefix(github.com/telepresenceio/watchable)
+  nolintlint:
+    allow-unused: false
+    allow-leading-space: false
+    require-explanation: true
+    require-specific: true
+issues:
+  # Give me the full output
+  max-same-issues: 0
+  # Don't apply the default exclusions
+  exclude-use-default: false

@@ -15,7 +15,3 @@ tab_width = 8
 
 [{go.mod,go.sum}]
 indent_style = tab
-
-[*.proto]
-indent_style = space
-indent_size = 2
