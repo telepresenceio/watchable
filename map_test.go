@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/telepresenceio/telepresence/rpc/v2/manager"
 
-	"github.com/telepresenceio/watchable/watchable"
+	"github.com/telepresenceio/watchable"
 )
 
 func assertMessageMapSnapshotEqual[V watchable.Message](t *testing.T, expected, actual watchable.Snapshot[V], msgAndArgs ...any) bool {
