@@ -12,11 +12,15 @@ jobs:
         with:
           go-version: '~1.18.0'
       - run: make check
+      - name: Prepare to report test coverage
+        # codecov.io errors out if the file extension isn't `.xml`,
+        # even though it isn't an XML file.
+        run: cp watchable.cov watchable.cov.xml
       - name: Report test coverage
         uses: codecov/codecov-action@v3
         with:
-          files: watchable.cov
-          # fail_ci_if_error: true
+          files: watchable.cov.xml
+          fail_ci_if_error: true
   lint:
     name: "${{ github.event_name }} / lint"
     runs-on: ubuntu-latest
