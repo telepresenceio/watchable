@@ -38,6 +38,8 @@ type Snapshot[K comparable, V any] struct {
 // type must behave correctly in this package's 'DeepCopy' and 'DeepEqual' functions.  The type
 // parameter is overly-permissive due to limitations in Go's type system.  See the documentation on
 // those functions for more information.
+//
+// The zero Map[K,V] is empty and ready for use.  A Map[K,V] must not be copied after first use.
 type Map[K comparable, V any] struct {
 	lock sync.RWMutex
 	// things guarded by 'lock'
