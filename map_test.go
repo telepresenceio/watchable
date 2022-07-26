@@ -51,7 +51,24 @@ func assertMessageMapSnapshotEqual[K comparable, V proto.Message](t *testing.T, 
 }
 
 func TestMessageMap_Close(t *testing.T) {
-	// TODO
+	var m watchable.Map[string, *manager.AgentInfo]
+
+	m.Store("a", agentInfoCtor("A"))
+	m.Close()
+	assert.Panics(t, func() {
+		m.Store("b", agentInfoCtor("B"))
+	})
+	assert.Panics(t, func() {
+		m.Delete("a")
+	})
+
+	a, ok := m.Load("a")
+	assert.True(t, ok)
+	assertDeepCopies(t, a, agentInfoCtor("A"))
+
+	b, ok := m.Load("b")
+	assert.False(t, ok)
+	assert.Zero(t, b)
 }
 
 func agentInfoCtor(n string) *manager.AgentInfo {
