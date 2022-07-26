@@ -150,7 +150,25 @@ func typedTestMessageMap_Load[K ~string, V proto.Message](t *testing.T, ctor fun
 }
 
 func TestMessageMap_LoadAll(t *testing.T) {
-	// TODO
+	var m watchable.Map[string, *manager.AgentInfo]
+
+	assert.Equal(t, 0, len(m.LoadAll()))
+	assert.Equal(t, 0, m.Len())
+
+	vOrig := agentInfoCtor("v")
+	m.Store("k", vOrig)
+	all := m.LoadAll()
+	assert.Equal(t, 1, len(all))
+	assert.Equal(t, 1, m.Len())
+	vLoad, ok := m.Load("k")
+	assert.True(t, ok)
+	assertDeepCopies(t, vOrig, vLoad)
+	assertDeepCopies(t, vOrig, all["k"])
+	assertDeepCopies(t, vLoad, all["k"])
+
+	m.Delete("k")
+	assert.Equal(t, 0, len(m.LoadAll()))
+	assert.Equal(t, 0, m.Len())
 }
 
 func TestMessageMap_LoadAndDelete(t *testing.T) {
@@ -212,11 +230,37 @@ func typedTestMessageMap_LoadOrStore[K ~string, V proto.Message](t *testing.T, c
 }
 
 func TestMessageMap_Store(t *testing.T) {
-	// TODO
+	var m watchable.Map[string, *manager.AgentInfo]
+
+	// Check that the source is free to reuse the object without corrupting the map.
+	src := agentInfoCtor("a")
+	m.Store("k", src)
+	src.Name = "b"
+	dst, ok := m.Load("k")
+	assert.True(t, ok)
+	assert.Equal(t, "a", dst.Name)
 }
 
 func TestMessageMap_CompareAndSwap(t *testing.T) {
-	// TODO
+	var m watchable.Map[string, *manager.AgentInfo]
+
+	a := agentInfoCtor("A")
+	b := agentInfoCtor("B")
+	c := agentInfoCtor("C")
+
+	m.Store("k", a)
+
+	// don't swap
+	assert.False(t, m.CompareAndSwap("k", b, c))
+	_a, ok := m.Load("k")
+	assert.True(t, ok)
+	assertDeepCopies(t, a, _a)
+
+	// do swap
+	assert.True(t, m.CompareAndSwap("k", a, c))
+	_c, ok := m.Load("k")
+	assert.True(t, ok)
+	assertDeepCopies(t, c, _c)
 }
 
 func TestMessageMap_Subscribe(t *testing.T) {
@@ -351,6 +395,39 @@ func typedTestMessageMap_Subscribe[K ~string, V proto.Message](t *testing.T, cto
 	snapshot, ok = <-ch
 	assert.False(t, ok)
 	assert.Zero(t, snapshot)
+
+	// We did a "Context-cancelation while there is outstanding data to read", now let's do one
+	// when there isn't data to read.
+	ctx = dlog.NewTestContext(t, true)
+	ctx, cancelCtx = context.WithCancel(ctx)
+	ch = m.Subscribe(ctx)
+	// Get the immediately available snapshot.
+	snapshot, ok = <-ch
+	assert.True(t, ok)
+	assertMessageMapSnapshotEqual(t,
+		watchable.Snapshot[K, V]{
+			State: map[K]V{
+				"d": ctor("D"),
+				"e": ctor("E"),
+				"f": ctor("F"),
+				"g": ctor("G"),
+				"h": ctor("H"),
+				"i": ctor("I"),
+			},
+			Updates: nil,
+		},
+		snapshot)
+	// Check that that we don't have another snapshot available.
+	select {
+	case <-ch:
+		t.Error("shouldn't have gotten a snapshot")
+	case <-time.After(10 * time.Millisecond): // just long enough that we have confidence <-ch isn't going to happen
+	}
+	// Now check the cancelation.
+	cancelCtx()
+	snapshot, ok = <-ch
+	assert.False(t, ok)
+	assert.Zero(t, snapshot)
 }
 
 func TestMessageMap_SubscribeSubset(t *testing.T) {
@@ -386,6 +463,7 @@ func typedTestMessageMap_SubscribeSubset[K ~string, V proto.Message](t *testing.
 	m.Store("a", ctor("A"))
 	select {
 	case <-ch:
+		t.Error("shouldn't have gotten a snapshot")
 	case <-time.After(10 * time.Millisecond): // just long enough that we have confidence <-ch isn't going to happen
 	}
 
@@ -438,6 +516,21 @@ func typedTestMessageMap_SubscribeSubset[K ~string, V proto.Message](t *testing.
 		return !comp(v, "ignoreme")
 	})
 	snapshot, ok = <-ch
+	assert.False(t, ok)
+	assert.Zero(t, snapshot)
+}
+
+func TestMessageMap_Subscribe2(t *testing.T) {
+	// TestMessageMap_SubscribeSubset called .Close() when there wasn't any outstanding data
+	// for subscribers to read.  Let's do a similar test but when there is outstanding data.
+	ctx := dlog.NewTestContext(t, true)
+	var m watchable.Map[string, *manager.AgentInfo]
+
+	m.Store("a", agentInfoCtor("A"))
+	ch := m.Subscribe(ctx)
+	m.Close()
+
+	snapshot, ok := <-ch
 	assert.False(t, ok)
 	assert.Zero(t, snapshot)
 }
