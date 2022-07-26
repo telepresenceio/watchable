@@ -2,6 +2,7 @@ package watchable
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -112,8 +113,7 @@ func (tm *Map[K, V]) Load(key K) (value V, ok bool) {
 	return DeepCopy(ret), true
 }
 
-// Store sets a key sets the value for a key.  This blocks forever if .Close() has already been
-// called.
+// Store sets a key sets the value for a key.  This panics if .Close() has already been called.
 func (tm *Map[K, V]) Store(key K, val V) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
@@ -124,7 +124,7 @@ func (tm *Map[K, V]) Store(key K, val V) {
 // LoadOrStore returns the existing value for the key if present.  Otherwise, it stores and returns
 // the given value. The 'loaded' result is true if the value was loaded, false if stored.
 //
-// If the value does need to be stored, all the same blocking semantics as .Store() apply
+// If the value does need to be stored, all the same semantics as .Store() apply.
 func (tm *Map[K, V]) LoadOrStore(key K, val V) (value V, loaded bool) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
@@ -158,9 +158,7 @@ func (tm *Map[K, V]) CompareAndSwap(key K, old, new V) bool {
 func (tm *Map[K, V]) unlockedStore(key K, val V) {
 	tm.unlockedInit()
 	if tm.unlockedIsClosed() {
-		// block forever
-		tm.lock.Unlock()
-		select {}
+		panic(errors.New("watchable.Map: Store called on closed map"))
 	}
 
 	tm.value[key] = val
@@ -172,7 +170,7 @@ func (tm *Map[K, V]) unlockedStore(key K, val V) {
 	}
 }
 
-// Delete deletes the value for a key.  This blocks forever if .Close() has already been called.
+// Delete deletes the value for a key.  This panics if .Close() has already been called.
 func (tm *Map[K, V]) Delete(key K) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
@@ -183,9 +181,7 @@ func (tm *Map[K, V]) Delete(key K) {
 func (tm *Map[K, V]) unlockedDelete(key K) {
 	tm.unlockedInit()
 	if tm.unlockedIsClosed() {
-		// block forever
-		tm.lock.Unlock()
-		select {}
+		panic(errors.New("watchable.Map: Delete called on closed map"))
 	}
 
 	if tm.value == nil {
@@ -203,7 +199,7 @@ func (tm *Map[K, V]) unlockedDelete(key K) {
 // LoadAndDelete deletes the value for a key, returning a deepcopy of the previous value if any.
 // The 'loaded' result reports whether the key was present.
 //
-// If the value does need to be deleted, all the same blocking semantics as .Delete() apply.
+// If the value does need to be deleted, all the same semantics as .Delete() apply.
 func (tm *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
@@ -221,10 +217,12 @@ func (tm *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 // Close marks the map as "finished", all subscriber channels are closed and further mutations are
 // forbidden.
 //
-// After .Close() is called, any calls to .Store() will block forever, and any calls to .Subscribe()
-// will return an already-closed channel.
+// After .Close() is called:
 //
-// .Load() and .LoadAll() calls will continue to work normally after .Close() has been called.
+// - any attempts to mutate the map (calls to .Store() or .Delete()) will panic;
+// - any attempts to read the map (calls to .Load(), .LoadAll(), or .LoadAllMatching()) will
+//   continue to work normally; and
+// - any calls to .Subscribe() or .SubscribeSubset() will return an already-closed channel.
 func (tm *Map[K, V]) Close() {
 	tm.lock.Lock()
 
