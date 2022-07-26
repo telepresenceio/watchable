@@ -2,60 +2,64 @@ package watchable
 
 import (
 	"context"
+	"errors"
 	"sync"
-
-	"google.golang.org/protobuf/proto"
 )
 
-type Message = proto.Message
-
 // Update describes a mutation made to a Map.
-type Update[V Message] struct {
-	Key    string
+type Update[K comparable, V any] struct {
+	Key    K
 	Delete bool // Whether this is deleting the entry for .Key, or setting it to .Value.
 	Value  V
 }
 
 // Snapshot contains a snapshot of the current state of a Map, as well as a list of
 // changes that have happened since the last snapshot.
-type Snapshot[V Message] struct {
+type Snapshot[K comparable, V any] struct {
 	// State is the current state of the snapshot.
-	State map[string]V
+	State map[K]V
 	// Updates is the list of mutations that have happened since the previous snapshot.
 	// Mutations that delete a value have .Delete=true, and .Value set to the value that was
 	// deleted.  No-op updates are not included (i.e., setting something to its current value,
 	// or deleting something that does not exist).
-	Updates []Update[V]
+	Updates []Update[K, V]
 }
 
-// Map is a wrapper around map[string]VALTYPE that is very similar to sync.Map, and that
-// provides the additional features that:
+// Map[K,V] is a wrapper around map[K]V that is very similar to sync.Map, and that provides the
+// additional features that:
 //
 // 1. it is thread-safe (compared to a bare map)
 // 2. it provides type safety (compared to a sync.Map)
 // 3. it provides a compare-and-swap operation
 // 4. you can Subscribe to either the whole map or just a subset of the map to watch for updates.
 //    This gives you complete snapshots, deltas, and coalescing of rapid updates.
-type Map[V Message] struct {
+//
+// Despite the type parameter for 'V' being 'any', it is not permissible to use any old type; the
+// type must behave correctly in this package's 'DeepCopy' and 'DeepEqual' functions.  The type
+// parameter is overly-permissive due to limitations in Go's type system.  See the documentation on
+// those functions for more information.
+//
+// The zero Map[K,V] is empty and ready for use.  A Map[K,V] must not be copied after first use.
+type Map[K comparable, V any] struct {
 	lock sync.RWMutex
 	// things guarded by 'lock'
 	close       chan struct{} // can read from the channel while unlocked, IF you've already validated it's non-nil
-	value       map[string]V
-	subscribers map[<-chan Update[V]]chan<- Update[V] // readEnd ↦ writeEnd
+	value       map[K]V
+	subscribers map[<-chan Update[K, V]]chan<- Update[K, V] // readEnd ↦ writeEnd
 
 	// not guarded by 'lock'
 	wg sync.WaitGroup
 }
 
-func (tm *Map[V]) unlockedInit() {
+func (tm *Map[K, V]) unlockedInit() {
 	if tm.close == nil {
 		tm.close = make(chan struct{})
-		tm.value = make(map[string]V)
-		tm.subscribers = make(map[<-chan Update[V]]chan<- Update[V])
+		tm.value = make(map[K]V)
+		tm.subscribers = make(map[<-chan Update[K, V]]chan<- Update[K, V])
 	}
 }
 
-func (tm *Map[V]) unlockedIsClosed() bool {
+func (tm *Map[K, V]) unlockedIsClosed() bool {
 	select {
 	case <-tm.close:
 		return true
@@ -64,56 +68,51 @@ func (tm *Map[V]) unlockedIsClosed() bool {
 	}
 }
 
-func (tm *Map[V]) unlockedLoadAll() map[string]V {
-	ret := make(map[string]V, len(tm.value))
+func (tm *Map[K, V]) unlockedLoadAllMatching(includep func(K, V) bool) map[K]V {
+	ret := make(map[K]V, len(tm.value))
 	for k, v := range tm.value {
-		ret[k] = proto.Clone(v).(V)
-	}
-	return ret
-}
-
-// LoadAll returns a deepcopy of all key/value pairs in the map.
-func (tm *Map[V]) LoadAll() map[string]V {
-	tm.lock.RLock()
-	defer tm.lock.RUnlock()
-	return tm.unlockedLoadAll()
-}
-
-// CountAll returns a count of all key/value pairs in the map.
-func (tm *Map[V]) CountAll() int {
-	tm.lock.RLock()
-	defer tm.lock.RUnlock()
-	return len(tm.value)
-}
-
-// LoadAllMatching returns a deepcopy of all key/value pairs in the map for which the given
-// function returns true. The map is locked during the evaluation of the filter.
-func (tm *Map[V]) LoadAllMatching(filter func(string, V) bool) map[string]V {
-	tm.lock.RLock()
-	defer tm.lock.RUnlock()
-	ret := make(map[string]V)
-	for k, v := range tm.value {
-		if filter(k, v) {
-			ret[k] = proto.Clone(v).(V)
+		if includep(k, v) {
+			ret[k] = DeepCopy(v)
 		}
 	}
 	return ret
 }
 
+// LoadAll returns a deepcopy of all key/value pairs in the map.
+func (tm *Map[K, V]) LoadAll() map[K]V {
+	return tm.LoadAllMatching(func(K, V) bool {
+		return true
+	})
+}
+
+// LoadAllMatching returns a deepcopy of all key/value pairs in the map for which the given function
+// returns true.  The map is locked during the evaluation of the filter.
+func (tm *Map[K, V]) LoadAllMatching(include func(K, V) bool) map[K]V {
+	tm.lock.RLock()
+	defer tm.lock.RUnlock()
+	return tm.unlockedLoadAllMatching(include)
+}
+
+// Len returns the number of key/value pairs in the map.
+func (tm *Map[K, V]) Len() int {
+	tm.lock.RLock()
+	defer tm.lock.RUnlock()
+	return len(tm.value)
+}
+
 // Load returns a deepcopy of the value for a specific key.
-func (tm *Map[V]) Load(key string) (value V, ok bool) {
+func (tm *Map[K, V]) Load(key K) (value V, ok bool) {
 	tm.lock.RLock()
 	defer tm.lock.RUnlock()
 	ret, ok := tm.value[key]
 	if !ok {
 		return ret, false
 	}
-	return proto.Clone(ret).(V), true
+	return DeepCopy(ret), true
 }
 
-// Store sets a key sets the value for a key.  This blocks forever if .Close() has already been
-// called.
-func (tm *Map[V]) Store(key string, val V) {
+// Store sets a key sets the value for a key.  This panics if .Close() has already been called.
+func (tm *Map[K, V]) Store(key K, val V) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
@@ -123,76 +122,69 @@ func (tm *Map[V]) Store(key string, val V) {
 // LoadOrStore returns the existing value for the key if present.  Otherwise, it stores and returns
 // the given value. The 'loaded' result is true if the value was loaded, false if stored.
 //
-// If the value does need to be stored, all the same blocking semantics as .Store() apply
-func (tm *Map[V]) LoadOrStore(key string, val V) (value V, loaded bool) {
+// If the value does need to be stored, all the same semantics as .Store() apply.
+func (tm *Map[K, V]) LoadOrStore(key K, val V) (value V, loaded bool) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
 	loadedVal, loadedOK := tm.value[key]
 	if loadedOK {
-		return proto.Clone(loadedVal).(V), true
+		return DeepCopy(loadedVal), true
 	}
 	tm.unlockedStore(key, val)
-	return proto.Clone(val).(V), false
+	return DeepCopy(val), false
 }
 
 // CompareAndSwap is the atomic equivalent of:
 //
-//     if loadedVal, loadedOK := m.Load(key); loadedOK && proto.Equal(loadedVal, old) {
+//     if loadedVal, loadedOK := m.Load(key); loadedOK && loadedVal.Equal(old) {
 //         m.Store(key, new)
 //         return true
 //     }
 //     return false
-func (tm *Map[V]) CompareAndSwap(key string, old, new V) bool {
+func (tm *Map[K, V]) CompareAndSwap(key K, old, new V) bool {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
-	if loadedVal, loadedOK := tm.value[key]; loadedOK && proto.Equal(loadedVal, old) {
+	if loadedVal, loadedOK := tm.value[key]; loadedOK && DeepEqual(loadedVal, old) {
 		tm.unlockedStore(key, new)
 		return true
 	}
 	return false
 }
 
-func (tm *Map[V]) unlockedStore(key string, val V) {
+func (tm *Map[K, V]) unlockedStore(key K, val V) {
 	tm.unlockedInit()
 	if tm.unlockedIsClosed() {
-		// block forever
-		tm.lock.Unlock()
-		select {}
+		panic(errors.New("watchable.Map: Store called on closed map"))
 	}
 
-	tm.value[key] = val
+	tm.value[key] = DeepCopy(val)
 	for _, subscriber := range tm.subscribers {
-		subscriber <- Update[V]{
+		subscriber <- Update[K, V]{
 			Key:   key,
-			Value: proto.Clone(val).(V),
+			Value: DeepCopy(val),
 		}
 	}
 }
 
-// Delete deletes the value for a key.  This blocks forever if .Close() has already been called.
-func (tm *Map[V]) Delete(key string) {
+// Delete deletes the value for a key.  This panics if .Close() has already been called.
+func (tm *Map[K, V]) Delete(key K) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
 	tm.unlockedDelete(key)
 }
 
-func (tm *Map[V]) unlockedDelete(key string) {
+func (tm *Map[K, V]) unlockedDelete(key K) {
 	tm.unlockedInit()
 	if tm.unlockedIsClosed() {
-		// block forever
-		tm.lock.Unlock()
-		select {}
+		panic(errors.New("watchable.Map: Delete called on closed map"))
 	}
 
-	if tm.value == nil {
-		return
-	}
 	delete(tm.value, key)
 	for _, subscriber := range tm.subscribers {
-		subscriber <- Update[V]{
+		subscriber <- Update[K, V]{
 			Key:    key,
 			Delete: true,
 		}
@@ -202,8 +194,8 @@ func (tm *Map[V]) unlockedDelete(key string) {
 // LoadAndDelete deletes the value for a key, returning a deepcopy of the previous value if any.
 // The 'loaded' result reports whether the key was present.
 //
-// If the value does need to be deleted, all the same blocking semantics as .Delete() apply.
-func (tm *Map[V]) LoadAndDelete(key string) (value V, loaded bool) {
+// If the value does need to be deleted, all the same semantics as .Delete() apply.
+func (tm *Map[K, V]) LoadAndDelete(key K) (value V, loaded bool) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
@@ -214,17 +206,19 @@ func (tm *Map[V]) LoadAndDelete(key string) (value V, loaded bool) {
 
 	tm.unlockedDelete(key)
 
-	return proto.Clone(loadedVal).(V), true
+	return DeepCopy(loadedVal), true
 }
 
 // Close marks the map as "finished", all subscriber channels are closed and further mutations are
 // forbidden.
 //
-// After .Close() is called, any calls to .Store() will block forever, and any calls to .Subscribe()
-// will return an already-closed channel.
+// After .Close() is called:
 //
-// .Load() and .LoadAll() calls will continue to work normally after .Close() has been called.
-func (tm *Map[V]) Close() {
+// - any attempts to mutate the map (calls to .Store() or .Delete()) will panic;
+// - any attempts to read the map (calls to .Load(), .LoadAll(), or .LoadAllMatching()) will
+//   continue to work normally; and
+// - any calls to .Subscribe() or .SubscribeSubset() will return an already-closed channel.
+func (tm *Map[K, V]) Close() {
 	tm.lock.Lock()
 
 	tm.unlockedInit()
@@ -237,17 +231,19 @@ func (tm *Map[V]) Close() {
 
 // internalSubscribe returns a channel (that blocks on both ends), that is written to on each map
 // update.  If the map is already Close()ed, then this returns nil.
-func (tm *Map[V]) internalSubscribe(_ context.Context) (<-chan Update[V], map[string]V) {
+func (tm *Map[K, V]) internalSubscribe(_ context.Context) (<-chan Update[K, V], map[K]V) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 	tm.unlockedInit()
 
-	ret := make(chan Update[V])
+	ret := make(chan Update[K, V])
 	if tm.unlockedIsClosed() {
 		return nil, nil
 	}
 	tm.subscribers[ret] = ret
-	return ret, tm.unlockedLoadAll()
+	return ret, tm.unlockedLoadAllMatching(func(K, V) bool {
+		return true
+	})
 }
 
 // Subscribe returns a channel that will emit a complete snapshot of the map immediately after the
@@ -262,8 +258,8 @@ func (tm *Map[V]) internalSubscribe(_ context.Context) (<-chan Update[V], map[st
 //
 // The returned channel will be closed when the Context is Done, or .Close() is called.  If .Close()
 // has already been called, then an already-closed channel is returned.
-func (tm *Map[V]) Subscribe(ctx context.Context) <-chan Snapshot[V] {
-	return tm.SubscribeSubset(ctx, func(string, V) bool {
+func (tm *Map[K, V]) Subscribe(ctx context.Context) <-chan Snapshot[K, V] {
+	return tm.SubscribeSubset(ctx, func(K, V) bool {
 		return true
 	})
 }
@@ -272,9 +268,9 @@ func (tm *Map[V]) Subscribe(ctx context.Context) <-chan Snapshot[V] {
 // the 'include' predicate.  Mutations to entries that don't satisfy the predicate do not cause a
 // new snapshot to be emitted.  If the value for a key changes from satisfying the predicate to not
 // satisfying it, then this is treated as a delete operation, and a new snapshot is generated.
-func (tm *Map[V]) SubscribeSubset(ctx context.Context, include func(string, V) bool) <-chan Snapshot[V] {
+func (tm *Map[K, V]) SubscribeSubset(ctx context.Context, include func(K, V) bool) <-chan Snapshot[K, V] {
 	upstream, initialSnapshot := tm.internalSubscribe(ctx)
-	downstream := make(chan Snapshot[V])
+	downstream := make(chan Snapshot[K, V])
 
 	if upstream == nil {
 		close(downstream)
@@ -287,19 +283,21 @@ func (tm *Map[V]) SubscribeSubset(ctx context.Context, include func(string, V) b
 	return downstream
 }
 
-func (tm *Map[V]) coalesce(
+func (tm *Map[K, V]) coalesce(
 	ctx context.Context,
-	includep func(string, V) bool,
-	upstream <-chan Update[V],
-	downstream chan<- Snapshot[V],
-	initialSnapshot map[string]V,
+	includep func(K, V) bool,
+	upstream <-chan Update[K, V],
+	downstream chan<- Snapshot[K, V],
+	initialSnapshot map[K]V,
 ) {
 	defer tm.wg.Done()
 	defer close(downstream)
 
 	var shutdown func()
 	shutdown = func() {
-		shutdown = func() {} // Make this function an empty one after first run to prevent calling the following goroutine multiple times
+		// Make this function an empty one after first run to prevent launching the
+		// following goroutine multiple times.
+		shutdown = func() {}
 		// Do this asynchronously because getting the lock might block a .Store() that's
 		// waiting on us to read from 'upstream'!  We don't need to worry about separately
 		// waiting for this goroutine because we implicitly do that when we drain
@@ -315,21 +313,21 @@ func (tm *Map[V]) coalesce(
 	// Cur is a snapshot of the current state all the map according to all MAPTYPEUpdates we've
 	// received from 'upstream', with any entries removed that do not satisfy the predicate
 	// 'includep'.
-	cur := make(map[string]V)
+	cur := make(map[K]V)
 	for k, v := range initialSnapshot {
 		if includep(k, v) {
 			cur[k] = v
 		}
 	}
 
-	snapshot := Snapshot[V]{
+	snapshot := Snapshot[K, V]{
 		// snapshot.State is a copy of 'cur' that we send to the 'downstream' channel.  We
 		// don't send 'cur' directly because we're necessarily in a separate goroutine from
 		// the reader of 'downstream', and map gets/sets aren't thread-safe, so we'd risk
 		// memory corruption with our updating of 'cur' and the reader's accessing of 'cur'.
 		// snapshot.State gets set to 'nil' when we need to do a read before we can write to
 		// 'downstream' again.
-		State: make(map[string]V, len(cur)),
+		State: make(map[K]V, len(cur)),
 
 		Updates: nil,
 	}
@@ -338,7 +336,7 @@ func (tm *Map[V]) coalesce(
 	}
 
 	// applyUpdate applies an update to 'cur', and updates 'snapshot.State' as nescessary.
-	applyUpdate := func(update Update[V]) {
+	applyUpdate := func(update Update[K, V]) {
 		if update.Delete || !includep(update.Key, update.Value) {
 			if old, haveOld := cur[update.Key]; haveOld {
 				update.Delete = true
@@ -348,20 +346,20 @@ func (tm *Map[V]) coalesce(
 				if snapshot.State != nil {
 					delete(snapshot.State, update.Key)
 				} else {
-					snapshot.State = make(map[string]V, len(cur))
+					snapshot.State = make(map[K]V, len(cur))
 					for k, v := range cur {
 						snapshot.State[k] = v
 					}
 				}
 			}
 		} else {
-			if old, haveOld := cur[update.Key]; !haveOld || !proto.Equal(old, update.Value) {
+			if old, haveOld := cur[update.Key]; !haveOld || !DeepEqual(old, update.Value) {
 				snapshot.Updates = append(snapshot.Updates, update)
 				cur[update.Key] = update.Value
 				if snapshot.State != nil {
 					snapshot.State[update.Key] = update.Value
 				} else {
-					snapshot.State = make(map[string]V, len(cur))
+					snapshot.State = make(map[K]V, len(cur))
 					for k, v := range cur {
 						snapshot.State[k] = v
 					}
@@ -409,7 +407,7 @@ func (tm *Map[V]) coalesce(
 				}
 				applyUpdate(update)
 			case downstream <- snapshot:
-				snapshot = Snapshot[V]{}
+				snapshot = Snapshot[K, V]{}
 			}
 		}
 	}
