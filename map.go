@@ -66,19 +66,29 @@ func (tm *Map[K, V]) unlockedIsClosed() bool {
 	}
 }
 
-func (tm *Map[K, V]) unlockedLoadAll() map[K]V {
+func (tm *Map[K, V]) unlockedLoadAllMatching(includep func(K, V) bool) map[K]V {
 	ret := make(map[K]V, len(tm.value))
 	for k, v := range tm.value {
-		ret[k] = DeepCopy(v)
+		if includep(k, v) {
+			ret[k] = DeepCopy(v)
+		}
 	}
 	return ret
 }
 
 // LoadAll returns a deepcopy of all key/value pairs in the map.
 func (tm *Map[K, V]) LoadAll() map[K]V {
+	return tm.LoadAllMatching(func(K, V) bool {
+		return true
+	})
+}
+
+// LoadAllMatching returns a deepcopy of all key/value pairs in the map for which the given function
+// returns true.  The map is locked during the evaluation of the filter.
+func (tm *Map[K, V]) LoadAllMatching(include func(K, V) bool) map[K]V {
 	tm.lock.RLock()
 	defer tm.lock.RUnlock()
-	return tm.unlockedLoadAll()
+	return tm.unlockedLoadAllMatching(include)
 }
 
 // Len returns the number of key/value pairs in the map.
@@ -86,20 +96,6 @@ func (tm *Map[K, V]) Len() int {
 	tm.lock.RLock()
 	defer tm.lock.RUnlock()
 	return len(tm.value)
-}
-
-// LoadAllMatching returns a deepcopy of all key/value pairs in the map for which the given
-// function returns true. The map is locked during the evaluation of the filter.
-func (tm *Map[K, V]) LoadAllMatching(filter func(K, V) bool) map[K]V {
-	tm.lock.RLock()
-	defer tm.lock.RUnlock()
-	ret := make(map[K]V)
-	for k, v := range tm.value {
-		if filter(k, v) {
-			ret[k] = DeepCopy(v)
-		}
-	}
-	return ret
 }
 
 // Load returns a deepcopy of the value for a specific key.
@@ -161,7 +157,7 @@ func (tm *Map[K, V]) unlockedStore(key K, val V) {
 		panic(errors.New("watchable.Map: Store called on closed map"))
 	}
 
-	tm.value[key] = val
+	tm.value[key] = DeepCopy(val)
 	for _, subscriber := range tm.subscribers {
 		subscriber <- Update[K, V]{
 			Key:   key,
@@ -184,9 +180,6 @@ func (tm *Map[K, V]) unlockedDelete(key K) {
 		panic(errors.New("watchable.Map: Delete called on closed map"))
 	}
 
-	if tm.value == nil {
-		return
-	}
 	delete(tm.value, key)
 	for _, subscriber := range tm.subscribers {
 		subscriber <- Update[K, V]{
@@ -246,7 +239,9 @@ func (tm *Map[K, V]) internalSubscribe(_ context.Context) (<-chan Update[K, V], 
 		return nil, nil
 	}
 	tm.subscribers[ret] = ret
-	return ret, tm.unlockedLoadAll()
+	return ret, tm.unlockedLoadAllMatching(func(K, V) bool {
+		return true
+	})
 }
 
 // Subscribe returns a channel that will emit a complete snapshot of the map immediately after the
