@@ -111,12 +111,50 @@ func (tm *Map[K, V]) Load(key K) (value V, ok bool) {
 	return DeepCopy(ret), true
 }
 
-// Store sets a key sets the value for a key.  This panics if .Close() has already been called.
+// Store sets the value for a key.  This panics if .Close() has already been called.
 func (tm *Map[K, V]) Store(key K, val V) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
 	tm.unlockedStore(key, val)
+}
+
+// StoreMultiple sets multiple entries in the map "at once".
+//
+// This is particularly useful when first initializing the Map, so that a half-initialized state
+// cannot be observed.  The ordering of the .Updates in the resulting Snapshot is undefined.  This
+// panics if .Close() has already been called.
+//
+// Use StoreComplete if you wish for values not in the argument to be deleted.
+func (tm *Map[K, V]) StoreMultiple(kvs map[K]V) {
+	tm.lock.Lock()
+	defer tm.lock.Unlock()
+
+	for k, v := range kvs {
+		tm.unlockedStore(k, v)
+	}
+}
+
+// StoreComplete completely replaces the map "at once"; storing or deleting entries from the map as
+// necessary to have it match the argument.
+//
+// This is particularly useful when first initializing the Map, so that a half-initialized state
+// cannot be observed.  The ordering of the .Updates in the resulting Snapshot is undefined.  This
+// panics if .Close() has already been called.
+//
+// Use StoreMultiple if you do not wish for values not n the argument to be deleted.
+func (tm *Map[K, V]) StoreComplete(kvs map[K]V) {
+	tm.lock.Lock()
+	defer tm.lock.Unlock()
+
+	for k, v := range kvs {
+		tm.unlockedStore(k, v)
+	}
+	for k := range tm.value {
+		if _, keep := kvs[k]; !keep {
+			tm.unlockedDelete(k)
+		}
+	}
 }
 
 // LoadOrStore returns the existing value for the key if present.  Otherwise, it stores and returns
