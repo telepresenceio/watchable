@@ -111,7 +111,7 @@ func (tm *Map[K, V]) Load(key K) (value V, ok bool) {
 	return DeepCopy(ret), true
 }
 
-// Store sets a key sets the value for a key.  This panics if .Close() has already been called.
+// Store sets the value for a key.  This panics if .Close() has already been called.
 func (tm *Map[K, V]) Store(key K, val V) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
